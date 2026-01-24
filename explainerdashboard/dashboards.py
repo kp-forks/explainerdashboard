@@ -120,9 +120,9 @@ class ExplainerTabsLayout(ExplainerComponent):
             instantiate_component(tab, explainer, name=str(i + 1), **kwargs)
             for i, tab in enumerate(tabs)
         ]
-        assert len(self.tabs) > 0, (
-            "When passing a list to tabs, need to pass at least one valid tab!"
-        )
+        assert (
+            len(self.tabs) > 0
+        ), "When passing a list to tabs, need to pass at least one valid tab!"
 
         self.register_components(*self.tabs)
 
@@ -898,12 +898,12 @@ class ExplainerDashboard:
                 config = yaml.safe_load(open(str(arg1), "r"))
             elif isinstance(arg1, dict):
                 config = arg1
-                assert "dashboard" in config, (
-                    ".yaml file does not have `dashboard` param."
-                )
-                assert "explainerfile" in config["dashboard"], (
-                    ".yaml file does not have explainerfile param"
-                )
+                assert (
+                    "dashboard" in config
+                ), ".yaml file does not have `dashboard` param."
+                assert (
+                    "explainerfile" in config["dashboard"]
+                ), ".yaml file does not have explainerfile param"
 
             explainer = BaseExplainer.from_file(config["dashboard"]["explainerfile"])
         else:
@@ -1272,11 +1272,14 @@ class ExplainerDashboard:
             )
             if use_waitress:
                 from waitress import serve
+
                 serve(app.server, host=host, port=port)
             else:
                 try:
+                    # Dash 3.0+ uses run()
                     app.run(port=port, host=host, **kwargs)
                 except AttributeError:
+                    # Fallback for Dash 2.x
                     app.run_server(port=port, host=host, **kwargs)
         else:
             if self.mode == "dash":
@@ -1298,16 +1301,36 @@ class ExplainerDashboard:
                         f"ExplainerDashboard.terminate({port})",
                         flush=True,
                     )
-                app.run_server(port=port, mode=mode, **kwargs)
+                try:
+                    # Dash 3.0+ uses run() with jupyter_mode parameter
+                    app.run(port=port, jupyter_mode=mode, **kwargs)
+                except (TypeError, AttributeError):
+                    # Fallback for Dash 2.x / older JupyterDash versions
+                    app.run_server(port=port, mode=mode, **kwargs)
             elif mode in ["inline", "jupyterlab"]:
                 print(
                     f"Starting ExplainerDashboard inline (terminate it with "
                     f"ExplainerDashboard.terminate({port}))",
                     flush=True,
                 )
-                app.run_server(
-                    port=port, mode=mode, width=self.width, height=self.height, **kwargs
-                )
+                try:
+                    # Dash 3.0+ uses run() with jupyter_mode, jupyter_width, jupyter_height parameters
+                    app.run(
+                        port=port,
+                        jupyter_mode=mode,
+                        jupyter_width=self.width,
+                        jupyter_height=self.height,
+                        **kwargs,
+                    )
+                except (TypeError, AttributeError):
+                    # Fallback for Dash 2.x / older JupyterDash versions
+                    app.run_server(
+                        port=port,
+                        mode=mode,
+                        width=self.width,
+                        height=self.height,
+                        **kwargs,
+                    )
             else:
                 raise ValueError(f"Unknown mode: mode='{mode}'!")
 
@@ -1507,9 +1530,9 @@ class ExplainerHub:
             self.app.config["SECRET_KEY"] = secret_key
         SimpleLogin(self.app, login_checker=self._validate_user)
 
-        assert self.max_dashboards is None or len(dashboards) <= self.max_dashboards, (
-            f"There should be less than {self.max_dashboards} in the hub."
-        )
+        assert (
+            self.max_dashboards is None or len(dashboards) <= self.max_dashboards
+        ), f"There should be less than {self.max_dashboards} in the hub."
 
         self.dashboards = self._instantiate_dashboards(dashboards, **kwargs)
         self.added_dashboard_counter = len(self.dashboards)
@@ -1524,13 +1547,11 @@ class ExplainerHub:
                 "only work if you run the hub as a single worker on a single node!"
             )
 
-        assert len(set(self.dashboard_names)) == len(self.dashboard_names), (
-            f"All dashboard .name properties should be unique, but received the following: {self.dashboard_names}"
-        )
+        assert (
+            len(set(self.dashboard_names)) == len(self.dashboard_names)
+        ), f"All dashboard .name properties should be unique, but received the following: {self.dashboard_names}"
         illegal_names = list(set(self.dashboard_names) & self.__reserved_names)
-        assert not illegal_names, (
-            f"The following .name properties for dashboards are not allowed: {illegal_names}!"
-        )
+        assert not illegal_names, f"The following .name properties for dashboards are not allowed: {illegal_names}!"
 
         if self.users:
             for dashboard in self.dashboards:
@@ -1690,9 +1711,9 @@ class ExplainerHub:
         elif isinstance(config, dict):
             config = deepcopy(config)
 
-        assert "explainerhub" in config, (
-            "Malformed yaml: explainerhub yaml file should start with 'explainerhub:'!"
-        )
+        assert (
+            "explainerhub" in config
+        ), "Malformed yaml: explainerhub yaml file should start with 'explainerhub:'!"
 
         config = config["explainerhub"]
 
@@ -1915,9 +1936,9 @@ class ExplainerHub:
                 raise ValueError("users_file should end with either .json or .yaml!")
 
             assert "users" in users_db, f"{users_file} should contain a 'users' dict!"
-            assert "dashboard_users" in users_db, (
-                f"{users_file} should contain a 'dashboard_users' dict!"
-            )
+            assert (
+                "dashboard_users" in users_db
+            ), f"{users_file} should contain a 'dashboard_users' dict!"
 
     def _hash_logins(self, logins: List[List], add_to_users_file: bool = False):
         """Turn a list of [user, password] pairs into a Flask-Login style user
@@ -2051,7 +2072,9 @@ class ExplainerHub:
         try:
             del users_db["users"][username]
         except Exception as e:
-            print(f"ERROR: Failed to delete user from users.json! Error: {e}", flush=True)
+            print(
+                f"ERROR: Failed to delete user from users.json! Error: {e}", flush=True
+            )
         for dashboard in users_db["dashboard_users"].keys():
             dashboard_users = users_db["dashboard_users"].get(dashboard)
             if dashboard_users is not None:
@@ -2595,7 +2618,9 @@ class ExplainerHub:
                         if dashboard_name in self.dashboard_names:
                             self.remove_dashboard(dashboard_name)
                     except Exception as e:
-                        print(f"ERROR: Failed to remove dashboard! Error: {e}", flush=True)
+                        print(
+                            f"ERROR: Failed to remove dashboard! Error: {e}", flush=True
+                        )
                     return redirect("/", code=302)
 
     def flask_server(self):
@@ -2705,11 +2730,29 @@ class InlineExplainer:
         """
         pio.templates.default = "none"
         if self._mode in ["inline", "jupyterlab"]:
-            app.run_server(
-                mode=self._mode, width=self._width, height=self._height, port=self._port
-            )
+            try:
+                # Dash 3.0+ uses run() with jupyter_mode, jupyter_width, jupyter_height parameters
+                app.run(
+                    jupyter_mode=self._mode,
+                    jupyter_width=self._width,
+                    jupyter_height=self._height,
+                    port=self._port,
+                )
+            except (TypeError, AttributeError):
+                # Fallback for Dash 2.x / older JupyterDash versions
+                app.run_server(
+                    mode=self._mode,
+                    width=self._width,
+                    height=self._height,
+                    port=self._port,
+                )
         elif self._mode == "external":
-            app.run_server(mode=self._mode, port=self._port, **self._kwargs)
+            try:
+                # Dash 3.0+ uses run() with jupyter_mode parameter
+                app.run(jupyter_mode=self._mode, port=self._port, **self._kwargs)
+            except (TypeError, AttributeError):
+                # Fallback for Dash 2.x / older JupyterDash versions
+                app.run_server(mode=self._mode, port=self._port, **self._kwargs)
         else:
             raise ValueError(
                 "mode should either be 'inline', 'jupyterlab'  or 'external'!"

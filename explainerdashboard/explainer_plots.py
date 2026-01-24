@@ -28,9 +28,8 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 
-import plotly.graph_objs as go
+import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 
 from .explainer_methods import matching_cols, safe_isinstance
 
@@ -348,8 +347,7 @@ def plotly_precision_plot(precision_df, cutoff=None, labels=None, pos_label=None
         title=f"percentage {label} vs predicted probability",
         yaxis=dict(title="counts"),
         yaxis2=dict(
-            title="percentage",
-            titlefont=dict(color="rgb(148, 103, 189)"),
+            title=dict(text="percentage", font=dict(color="rgb(148, 103, 189)")),
             tickfont=dict(color="rgb(148, 103, 189)"),
             overlaying="y",
             side="right",
@@ -410,9 +408,10 @@ def plotly_classification_plot(
     col_sums = classification_df.sum(axis=0)
 
     for label, below, above, total in classification_df.itertuples():
-        below_perc = 100 * below / col_sums["below"]
-        above_perc = 100 * above / col_sums["above"]
-        total_perc = 100 * total / col_sums["total"]
+        # Avoid divide by zero warnings
+        below_perc = 100 * below / col_sums["below"] if col_sums["below"] > 0 else 0.0
+        above_perc = 100 * above / col_sums["above"] if col_sums["above"] > 0 else 0.0
+        total_perc = 100 * total / col_sums["total"] if col_sums["total"] > 0 else 0.0
         if percentage:
             fig.add_trace(
                 go.Bar(
@@ -829,9 +828,9 @@ def plotly_dependence_plot(
     Returns:
         Plotly fig
     """
-    assert len(X_col) == len(shap_values), (
-        f"Column(len={len(X_col)}) and Shap values(len={len(shap_values)}) and should have the same length!"
-    )
+    assert (
+        len(X_col) == len(shap_values)
+    ), f"Column(len={len(X_col)}) and Shap values(len={len(shap_values)}) and should have the same length!"
     if idxs is not None:
         assert len(idxs) == X_col.shape[0]
         idxs = pd.Index(idxs).astype(str)
@@ -843,9 +842,9 @@ def plotly_dependence_plot(
             highlight_idx = highlight_index
             highlight_name = idxs[highlight_idx]
         elif isinstance(highlight_index, str):
-            assert highlight_index in idxs, (
-                f"highlight_index should be int or in idxs, {highlight_index} is neither!"
-            )
+            assert (
+                highlight_index in idxs
+            ), f"highlight_index should be int or in idxs, {highlight_index} is neither!"
             highlight_idx = idxs.get_loc(highlight_index)
             highlight_name = highlight_index
 
@@ -1036,9 +1035,9 @@ def plotly_shap_violin_plot(
         Plotly fig
     """
 
-    assert not is_numeric_dtype(X_col), (
-        f"{X_col.name} is not categorical! Can only plot violin plots for categorical features!"
-    )
+    assert not is_numeric_dtype(
+        X_col
+    ), f"{X_col.name} is not categorical! Can only plot violin plots for categorical features!"
 
     if cats_order is None:
         cats_order = sorted(X_col.unique().tolist())
@@ -1056,9 +1055,9 @@ def plotly_shap_violin_plot(
             highlight_idx = highlight_index
             highlight_name = idxs[highlight_idx]
         elif isinstance(highlight_index, str):
-            assert highlight_index in idxs, (
-                f"highlight_index should be int or in idxs, {highlight_index} is neither!"
-            )
+            assert (
+                highlight_index in idxs
+            ), f"highlight_index should be int or in idxs, {highlight_index} is neither!"
             highlight_idx = idxs.get_loc(highlight_index)
             highlight_name = highlight_index
 
@@ -1355,7 +1354,6 @@ def plotly_pdp(
     if plot_lines:
         x = pdp_df.columns.values
         pdp_sample = pdp_df.sample(min(num_grid_lines, len(pdp_df)))
-
 
         for row in pdp_sample.itertuples(index=False):
             data.append(
@@ -1901,9 +1899,9 @@ def plotly_shap_scatter_plot(
     Returns:
         Plotly fig
     """
-    assert matching_cols(X, shap_values_df), (
-        "X and shap_values_df should have matching columns!"
-    )
+    assert matching_cols(
+        X, shap_values_df
+    ), "X and shap_values_df should have matching columns!"
     if display_columns is None:
         display_columns = X.columns.tolist()
     if idxs is not None:
@@ -1916,9 +1914,9 @@ def plotly_shap_scatter_plot(
     length = len(X)
     if highlight_index is not None:
         if isinstance(highlight_index, int):
-            assert highlight_index >= 0 and highlight_index < len(X), (
-                "if highlight_index is int, then should be between 0 and {len(X)}!"
-            )
+            assert highlight_index >= 0 and highlight_index < len(
+                X
+            ), "if highlight_index is int, then should be between 0 and {len(X)}!"
             highlight_idx = highlight_index
             highlight_index = idxs[highlight_idx]
         elif isinstance(highlight_index, str):
@@ -2201,10 +2199,16 @@ def plotly_plot_residuals(
         idxs = [str(i) for i in range(len(preds))]
 
     res = y - preds
-    res_ratio = y / preds
+    # Avoid divide by zero warnings: use np.divide with where to handle zero preds
+    res_ratio = np.divide(
+        y, preds, out=np.full_like(y, np.nan, dtype=float), where=preds != 0
+    )
 
     if residuals == "log-ratio":
-        residuals_display = np.log(res_ratio)
+        # Avoid log(0) or log(inf) warnings by filtering out invalid values
+        valid_mask = (res_ratio > 0) & np.isfinite(res_ratio)
+        residuals_display = np.full_like(res_ratio, np.nan, dtype=float)
+        residuals_display[valid_mask] = np.log(res_ratio[valid_mask])
         residuals_name = "residuals log ratio<br>(log(y/preds))"
     elif residuals == "ratio":
         residuals_display = res_ratio
@@ -2313,10 +2317,16 @@ def plotly_residuals_vs_col(
         idxs = [str(i) for i in range(len(preds))]
 
     res = y - preds
-    res_ratio = y / preds
+    # Avoid divide by zero warnings: use np.divide with where to handle zero preds
+    res_ratio = np.divide(
+        y, preds, out=np.full_like(y, np.nan, dtype=float), where=preds != 0
+    )
 
     if residuals == "log-ratio":
-        residuals_display = np.log(res_ratio)
+        # Avoid log(0) or log(inf) warnings by filtering out invalid values
+        valid_mask = (res_ratio > 0) & np.isfinite(res_ratio)
+        residuals_display = np.full_like(res_ratio, np.nan, dtype=float)
+        residuals_display[valid_mask] = np.log(res_ratio[valid_mask])
         residuals_name = "residuals log ratio<br>(log(y/preds))"
     elif residuals == "ratio":
         residuals_display = res_ratio
@@ -2786,9 +2796,9 @@ def plotly_rf_trees(
 
     colors = ["blue"] * len(model.estimators_)
     if highlight_tree is not None:
-        assert highlight_tree >= 0 and highlight_tree <= len(model.estimators_), (
-            f"{highlight_tree} is out of range (0, {len(model.estimators_)})"
-        )
+        assert highlight_tree >= 0 and highlight_tree <= len(
+            model.estimators_
+        ), f"{highlight_tree} is out of range (0, {len(model.estimators_)})"
         colors[highlight_tree] = "red"
     warnings.filterwarnings("ignore", category=UserWarning)
     if safe_isinstance(model, "RandomForestClassifier", "ExtraTreesClassifier"):

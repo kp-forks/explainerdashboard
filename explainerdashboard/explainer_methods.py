@@ -32,6 +32,8 @@ __all__ = [
     "get_xgboost_path_df",
     "get_xgboost_path_summary_df",
     "get_xgboost_preds_df",
+    "_ensure_numeric_predictions",  # Internal helper for XGBoost 3.0+ compatibility
+    "_safe_make_scorer",  # Internal helper for CatBoost compatibility
 ]
 
 from functools import partial
@@ -51,6 +53,204 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import KFold, StratifiedKFold
 
 from joblib import Parallel, delayed
+
+
+def _ensure_numeric_predictions(pred):
+    """Convert predictions to numeric format, handling XGBoost 3.0+ string format.
+
+    Args:
+        pred: Prediction output from model (may be string, array, scalar, list)
+
+    Returns:
+        Numeric prediction (numpy array or scalar float)
+    """
+    # Handle None
+    if pred is None:
+        return None
+
+    # Handle string predictions (XGBoost 3.0+ may return strings like '[3.2967056E1]' or '[8.563135E-2,7.169811E-1,1.9738752E-1]')
+    if isinstance(pred, str):
+        try:
+            # Remove brackets and whitespace
+            cleaned = pred.strip().strip("[]").strip()
+            # Check if it contains comma-separated values
+            if "," in cleaned:
+                # Multiple values - convert to array
+                values = [float(v.strip()) for v in cleaned.split(",")]
+                return np.asarray(values)
+            else:
+                # Single value
+                return float(cleaned)
+        except (ValueError, AttributeError, TypeError):
+            # If conversion fails, try regex extraction
+            import re
+
+            # Use non-capturing group to get full numeric matches, not just exponent part
+            pattern = r"[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?"
+            matches = re.findall(pattern, pred)
+            if matches:
+                if len(matches) == 1:
+                    return float(matches[0])
+                else:
+                    return np.asarray([float(m) for m in matches])
+            # If all else fails, return as-is (will raise error later)
+            return pred
+
+    # Handle list/tuple of strings or mixed types
+    if isinstance(pred, (list, tuple)):
+        try:
+            converted = []
+            for item in pred:
+                if isinstance(item, str):
+                    cleaned = item.strip().strip("[]").strip()
+                    converted.append(float(cleaned))
+                else:
+                    item_conv = _ensure_numeric_predictions(item)
+                    converted.append(
+                        float(item_conv)
+                        if not isinstance(item_conv, np.ndarray)
+                        else item_conv
+                    )
+            return np.asarray(converted)
+        except (ValueError, AttributeError, TypeError):
+            pass  # Fall through to array conversion
+
+    # Convert to numpy array for processing
+    try:
+        pred_array = np.asarray(pred)
+    except (ValueError, TypeError):
+        # If we can't convert to array, try direct conversion
+        if isinstance(pred, (int, float)):
+            return float(pred)
+        return pred
+
+    # Handle string arrays (XGBoost 3.0+ may return arrays of strings)
+    if pred_array.dtype.kind == "U":  # Unicode string array
+        try:
+            # Convert each string element to float
+            def _convert_elem(elem):
+                if isinstance(elem, str):
+                    cleaned = elem.strip().strip("[]").strip()
+                    # Handle comma-separated values in string
+                    if "," in cleaned:
+                        # Multiple values - should not happen in scalar context, but handle it
+                        values = [float(v.strip()) for v in cleaned.split(",")]
+                        return values[0] if len(values) == 1 else np.asarray(values)
+                    # Handle scientific notation
+                    try:
+                        return float(cleaned)
+                    except ValueError:
+                        # Try regex extraction as fallback
+                        import re
+
+                        match = re.search(
+                            r"[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?", cleaned
+                        )
+                        if match:
+                            return float(match.group())
+                        raise
+                elif isinstance(elem, (int, float, np.integer, np.floating)):
+                    return float(elem)
+                elif isinstance(elem, np.ndarray):
+                    return float(elem.item()) if elem.ndim == 0 else elem
+                return elem
+
+            if pred_array.ndim == 0:
+                # Scalar string array
+                return _convert_elem(pred_array.item())
+            else:
+                # Multi-dimensional string array
+                converted = []
+                for p in pred_array.flatten():
+                    try:
+                        converted.append(_convert_elem(p))
+                    except (ValueError, TypeError):
+                        # Try regex extraction as fallback
+                        import re
+
+                        p_str = str(p)
+                        match = re.search(
+                            r"[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?", p_str
+                        )
+                        if match:
+                            converted.append(float(match.group()))
+                        else:
+                            raise
+                return np.array(converted).reshape(pred_array.shape)
+        except (ValueError, AttributeError, TypeError):
+            # If conversion fails, return original (will raise error later)
+            return pred
+
+    # Already numeric, return as numpy array or scalar
+    if pred_array.ndim == 0:
+        return pred_array.item()
+    return pred_array
+
+
+def _safe_make_scorer(
+    metric, greater_is_better=True, response_method="predict", **kwargs
+):
+    """Wrapper around make_scorer that handles models without __sklearn_tags__.
+
+    This fixes compatibility issues with CatBoost and other models that don't
+    implement the __sklearn_tags__ attribute required by newer scikit-learn versions.
+    """
+    # Try to create the scorer normally
+    try:
+        scorer = make_scorer(
+            metric,
+            greater_is_better=greater_is_better,
+            response_method=response_method,
+            **kwargs,
+        )
+    except Exception:
+        # If creation fails, create a wrapper scorer
+        scorer = None
+
+    # Create a wrapper that handles __sklearn_tags__ errors when scorer is called
+    def _wrapped_scorer(estimator, X, y_true):
+        try:
+            if scorer is not None:
+                return scorer(estimator, X, y_true)
+        except AttributeError as e:
+            if "__sklearn_tags__" in str(e):
+                # Model doesn't have __sklearn_tags__, call predict/predict_proba directly
+                if response_method == "predict_proba":
+                    y_pred = estimator.predict_proba(X)
+                else:
+                    y_pred = estimator.predict(X)
+                    y_pred = _ensure_numeric_predictions(y_pred)
+
+                if hasattr(metric, "__call__"):
+                    score = metric(y_true, y_pred)
+                else:
+                    from sklearn.metrics import get_scorer
+
+                    scorer_obj = get_scorer(metric)
+                    score = scorer_obj._score_func(y_true, y_pred)
+
+                return score if greater_is_better else -score
+            raise
+
+        # If scorer creation failed, use direct prediction
+        if scorer is None:
+            if response_method == "predict_proba":
+                y_pred = estimator.predict_proba(X)
+            else:
+                y_pred = estimator.predict(X)
+                y_pred = _ensure_numeric_predictions(y_pred)
+
+            if hasattr(metric, "__call__"):
+                score = metric(y_true, y_pred)
+            else:
+                from sklearn.metrics import get_scorer
+
+                scorer_obj = get_scorer(metric)
+                score = scorer_obj._score_func(y_true, y_pred)
+
+            return score if greater_is_better else -score
+
+    return _wrapped_scorer
 
 
 def append_dict_to_df(df: pd.DataFrame, row_dict: dict) -> pd.DataFrame:
@@ -191,9 +391,11 @@ def parse_cats(X, cats, sep: str = "_"):
 
     if isinstance(cats, dict):
         for k, v in cats.items():
-            assert set(v).issubset(set(all_cols)), (
-                f"These cats columns for {k} could not be found in X.columns: {set(v) - set(all_cols)}!"
-            )
+            assert set(
+                v
+            ).issubset(
+                set(all_cols)
+            ), f"These cats columns for {k} could not be found in X.columns: {set(v) - set(all_cols)}!"
             col_counter.update(v)
         onehot_dict = cats
     elif isinstance(cats, list):
@@ -203,9 +405,11 @@ def parse_cats(X, cats, sep: str = "_"):
                 col_counter.update(onehot_dict[cat])
             if isinstance(cat, dict):
                 for k, v in cat.items():
-                    assert set(v).issubset(set(all_cols)), (
-                        f"These cats columns for {k} could not be found in X.columns: {set(v) - set(all_cols)}!"
-                    )
+                    assert set(
+                        v
+                    ).issubset(
+                        set(all_cols)
+                    ), f"These cats columns for {k} could not be found in X.columns: {set(v) - set(all_cols)}!"
                     col_counter.update(v)
                     onehot_dict[k] = v
     multi_cols = [v for v, c in col_counter.most_common() if c > 1]
@@ -218,9 +422,9 @@ def parse_cats(X, cats, sep: str = "_"):
         "Please select a different name for your new cats columns!"
     )
     for col, count in col_counter.most_common():
-        assert set(X[col].astype(int).unique()).issubset({0, 1}), (
-            f"{col} is not a onehot encoded column (i.e. has values other than 0, 1)!"
-        )
+        assert set(X[col].astype(int).unique()).issubset(
+            {0, 1}
+        ), f"{col} is not a onehot encoded column (i.e. has values other than 0, 1)!"
     onehot_cols = list(onehot_dict.keys())
     for col in [col for col in all_cols if col not in col_counter.keys()]:
         onehot_dict[col] = [col]
@@ -623,13 +827,13 @@ def permutation_importances(
         onehot_dict = {col: [col] for col in X.columns}
 
     if isinstance(metric, str):
-        scorer = make_scorer(
+        scorer = _safe_make_scorer(
             metric,
             greater_is_better=greater_is_better,
             response_method="predict_proba" if needs_proba else "predict",
         )
     elif not needs_proba or pos_label is None:
-        scorer = make_scorer(
+        scorer = _safe_make_scorer(
             metric, greater_is_better=greater_is_better, response_method="predict"
         )
     else:
@@ -937,7 +1141,9 @@ def get_pdp_df(
         if is_classifier:
             if cast_to_float32:
                 dtemp = dtemp.values.astype("float32")
-            pred_probas = model.predict_proba(dtemp).squeeze()
+            pred_probas_raw = model.predict_proba(dtemp)
+            pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+            pred_probas = np.asarray(pred_probas_raw).squeeze()
             if multiclass:
                 for i in range(n_labels):
                     pdp_dfs[i][grid_value] = pred_probas[:, i]
@@ -946,7 +1152,9 @@ def get_pdp_df(
         else:
             if cast_to_float32:
                 dtemp = dtemp.values.astype("float32")
-            preds = model.predict(dtemp).squeeze()
+            preds_raw = model.predict(dtemp)
+            preds_raw = _ensure_numeric_predictions(preds_raw)
+            preds = np.asarray(preds_raw).squeeze()
             pdp_df[grid_value] = preds
     if multiclass:
         return pdp_dfs
@@ -1206,12 +1414,12 @@ def get_contrib_df(
     Returns:
         pd.DataFrame with columns=['col', 'contribution', 'value', 'cumulative', 'base']
     """
-    assert isinstance(X_row, pd.DataFrame), (
-        "X_row should be a pd.DataFrame! Use X.iloc[[index]]"
-    )
+    assert isinstance(
+        X_row, pd.DataFrame
+    ), "X_row should be a pd.DataFrame! Use X.iloc[[index]]"
     assert (
         len(X_row.iloc[[0]].values[0].shape) == 1
-    ), """X is not the right shape: len(X.values[0]) should be 1. 
+    ), """X is not the right shape: len(X.values[0]) should be 1.
             Try passing X.iloc[[index]]"""
     assert sort in {"abs", "high-to-low", "low-to-high", "importance", None}
 
@@ -1401,7 +1609,7 @@ def normalize_shap_interaction_values(shap_interaction_values, shap_values=None)
     return siv
 
 
-def get_decisionpath_df(decision_tree, observation, pos_label=1):
+def get_decisionpath_df(decision_tree, observation, pos_label=1, class_names=None):
     """summarize the path through a DecisionTree for a specific observation.
 
     Args:
@@ -1409,12 +1617,25 @@ def get_decisionpath_df(decision_tree, observation, pos_label=1):
             a fitted DecisionTree model.
         observation ([type]): single row of data to display tree path for.
         pos_label (int, optional): label of positive class. Defaults to 1.
+        class_names (list, optional): List of class names for mapping pos_label to class values.
+            Defaults to None.
 
     Returns:
         pd.DataFrame: columns=['node_id', 'average', 'feature',
             'value', 'split', 'direction', 'left', 'right', 'diff']
     """
-    nodes = decision_tree.predict_path(observation)
+    # Convert observation to numpy array for dtreeviz's predict_path
+    # dtreeviz internally accesses by integer index (node.feature() returns int)
+    if isinstance(observation, pd.Series):
+        observation_array = observation.values
+    elif isinstance(observation, pd.DataFrame):
+        observation_array = (
+            observation.values[0] if len(observation) == 1 else observation.values
+        )
+    else:
+        observation_array = np.asarray(observation)
+
+    nodes = decision_tree.predict_path(observation_array)
 
     decisiontree_df = pd.DataFrame(
         columns=[
@@ -1432,25 +1653,73 @@ def get_decisionpath_df(decision_tree, observation, pos_label=1):
     if decision_tree.is_classifier():
 
         def node_pred_proba(node):
-            return node.class_counts()[pos_label] / sum(node.class_counts())
+            class_counts_raw = node.class_counts()
+            # Handle both dict and numpy array return types from class_counts()
+            # Newer dtreeviz versions may return numpy arrays instead of dicts
+            if isinstance(class_counts_raw, dict):
+                class_counts = class_counts_raw
+                total = sum(class_counts.values())
+                if total == 0:
+                    return 0.0
+
+                # Try direct access first (most common case)
+                if pos_label in class_counts:
+                    return class_counts[pos_label] / total
+
+                # If pos_label not found, try to map it to available class keys
+                available_classes = sorted(class_counts.keys())
+                if len(available_classes) == 0:
+                    return 0.0
+
+                # Map pos_label (index in labels) to actual class value
+                if 0 <= pos_label < len(available_classes):
+                    class_key = available_classes[pos_label]
+                    return class_counts[class_key] / total
+
+                # If pos_label is out of range, clamp it to valid range
+                if pos_label >= len(available_classes):
+                    class_key = available_classes[-1]
+                    return class_counts[class_key] / total
+
+                # Final fallback: use the class with the highest count
+                class_key = max(class_counts, key=class_counts.get)
+                return class_counts[class_key] / total
+            else:
+                # Handle numpy array case (newer dtreeviz versions)
+                class_counts_array = np.asarray(class_counts_raw)
+                total = class_counts_array.sum()
+                if total == 0:
+                    return 0.0
+
+                # pos_label is an index into the array
+                if 0 <= pos_label < len(class_counts_array):
+                    return float(class_counts_array[pos_label]) / total
+                elif len(class_counts_array) > 0:
+                    # Clamp to valid range
+                    return float(class_counts_array[-1]) / total
+                return 0.0
 
         for node in nodes:
             if not node.isleaf():
+                # Use node.feature() (integer index) to access observation_array
+                # Use node.feature_name() (string) for display
+                feature_idx = node.feature()
+                feature_value = observation_array[feature_idx]
                 decisiontree_df = append_dict_to_df(
                     decisiontree_df,
                     {
                         "node_id": node.id,
                         "average": node_pred_proba(node),
                         "feature": node.feature_name(),
-                        "value": observation[node.feature_name()],
+                        "value": feature_value,
                         "split": node.split(),
                         "direction": "left"
-                        if observation[node.feature_name()] < node.split()
+                        if feature_value < node.split()
                         else "right",
                         "left": node_pred_proba(node.left),
                         "right": node_pred_proba(node.right),
                         "diff": node_pred_proba(node.left) - node_pred_proba(node)
-                        if observation[node.feature_name()] < node.split()
+                        if feature_value < node.split()
                         else node_pred_proba(node.right) - node_pred_proba(node),
                     },
                 )
@@ -1462,21 +1731,25 @@ def get_decisionpath_df(decision_tree, observation, pos_label=1):
 
         for node in nodes:
             if not node.isleaf():
+                # Use node.feature() (integer index) to access observation_array
+                # Use node.feature_name() (string) for display
+                feature_idx = node.feature()
+                feature_value = observation_array[feature_idx]
                 decisiontree_df = append_dict_to_df(
                     decisiontree_df,
                     {
                         "node_id": node.id,
                         "average": node_mean(node),
                         "feature": node.feature_name(),
-                        "value": observation[node.feature_name()],
+                        "value": feature_value,
                         "split": node.split(),
                         "direction": "left"
-                        if observation[node.feature_name()] < node.split()
+                        if feature_value < node.split()
                         else "right",
                         "left": node_mean(node.left),
                         "right": node_mean(node.right),
                         "diff": node_mean(node.left) - node_mean(node)
-                        if observation[node.feature_name()] < node.split()
+                        if feature_value < node.split()
                         else node_mean(node.right) - node_mean(node),
                     },
                 )
@@ -1726,22 +1999,40 @@ def get_xgboost_preds_df(xgbmodel, X_row, pos_label=1):
         is_classifier = True
         n_classes = len(xgbmodel.classes_)
         if n_classes == 2:
+            base_score_raw = xgbmodel.get_params()["base_score"]
+            base_score_raw = (
+                _ensure_numeric_predictions(base_score_raw)
+                if base_score_raw is not None
+                else None
+            )
             if pos_label == 1:
-                base_proba = xgbmodel.get_params()["base_score"] or 0.5
+                base_proba = (
+                    float(base_score_raw) if base_score_raw is not None else 0.5
+                )
             elif pos_label == 0:
-                base_proba = 1 - xgbmodel.get_params()["base_score"] or 0.5
+                base_proba = 1 - (
+                    float(base_score_raw) if base_score_raw is not None else 0.5
+                )
             else:
                 raise ValueError("pos_label should be either 0 or 1!")
             n_trees = len(xgbmodel.get_booster().get_dump())
             base_score = np.log(base_proba / (1 - base_proba))
         else:
             base_proba = 1.0 / n_classes
-            base_score = xgbmodel.get_params()["base_score"]
+            base_score_raw = xgbmodel.get_params()["base_score"]
+            base_score_raw = (
+                _ensure_numeric_predictions(base_score_raw)
+                if base_score_raw is not None
+                else None
+            )
+            base_score = float(base_score_raw) if base_score_raw is not None else 0.5
             n_trees = int(len(xgbmodel.get_booster().get_dump()) / n_classes)
 
     elif str(type(xgbmodel)).endswith("XGBRegressor'>"):
         is_classifier = False
-        base_score = xgbmodel.get_params()["base_score"]
+        base_score_raw = xgbmodel.get_params()["base_score"]
+        base_score_raw = _ensure_numeric_predictions(base_score_raw)
+        base_score = float(base_score_raw) if base_score_raw is not None else 0.5
         n_trees = len(xgbmodel.get_booster().get_dump())
     else:
         raise ValueError("Pass either an XGBClassifier or XGBRegressor!")
@@ -1749,37 +2040,63 @@ def get_xgboost_preds_df(xgbmodel, X_row, pos_label=1):
     if is_classifier:
         if n_classes == 2:
             if pos_label == 1:
-                preds = [
+                preds_raw = [
                     xgbmodel.predict(
                         X_row, iteration_range=(0, i + 1), output_margin=True
                     )[0]
                     for i in range(n_trees)
                 ]
             elif pos_label == 0:
-                preds = [
+                preds_raw = [
                     -xgbmodel.predict(
                         X_row, iteration_range=(0, i + 1), output_margin=True
                     )[0]
                     for i in range(n_trees)
                 ]
+            # Convert XGBoost 3.0+ string predictions to numeric
+            preds = []
+            for p in preds_raw:
+                p_conv = _ensure_numeric_predictions(p)
+                if isinstance(p_conv, np.ndarray):
+                    p_conv = p_conv.item() if p_conv.ndim == 0 else float(p_conv[0])
+                preds.append(float(p_conv))
             pred_probas = (np.exp(preds) / (1 + np.exp(preds))).tolist()
         else:
-            margins = [
+            margins_raw = [
                 xgbmodel.predict(X_row, iteration_range=(0, i + 1), output_margin=True)[
                     0
                 ]
                 for i in range(n_trees)
             ]
+            # Convert XGBoost 3.0+ string predictions to numeric
+            margins = []
+            for m in margins_raw:
+                m_conv = _ensure_numeric_predictions(m)
+                if isinstance(m_conv, np.ndarray):
+                    margins.append(m_conv)
+                elif isinstance(m_conv, (list, tuple)):
+                    margins.append(
+                        np.asarray([_ensure_numeric_predictions(x) for x in m_conv])
+                    )
+                else:
+                    margins.append(np.asarray([float(m_conv)]))
             preds = [margin[pos_label] for margin in margins]
             pred_probas = [
                 (np.exp(margin) / np.exp(margin).sum())[pos_label] for margin in margins
             ]
 
     else:
-        preds = [
+        preds_raw = [
             xgbmodel.predict(X_row, iteration_range=(0, i + 1), output_margin=True)[0]
             for i in range(n_trees)
         ]
+        # Convert XGBoost 3.0+ string predictions to numeric
+        preds = []
+        for p in preds_raw:
+            p_conv = _ensure_numeric_predictions(p)
+            if isinstance(p_conv, np.ndarray):
+                p_conv = p_conv.item() if p_conv.ndim == 0 else float(p_conv[0])
+            preds.append(float(p_conv))
 
     xgboost_preds_df = pd.DataFrame(
         dict(tree=range(-1, n_trees), pred=[base_score] + preds)

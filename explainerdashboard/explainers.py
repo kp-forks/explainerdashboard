@@ -22,7 +22,6 @@ import warnings
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
-from pandas.errors import OptionError
 
 import shap
 
@@ -621,9 +620,9 @@ class BaseExplainer(ABC):
         func should either be a function that takes a single parameter: def func(index)
         or a method that takes a single parameter: def func(self, index)
         """
-        assert callable(func), (
-            f"{func} is not a callable! pass either a function or a method!"
-        )
+        assert callable(
+            func
+        ), f"{func} is not a callable! pass either a function or a method!"
         argspec = inspect.getfullargspec(func).args
         if argspec == ["self", "index"]:
             self._index_exists_func = MethodType(func, self)
@@ -655,9 +654,9 @@ class BaseExplainer(ABC):
         func should either be a parameterless function: def func(): ...
         or a parameterless method: def func(self): ...
         """
-        assert callable(func), (
-            f"{func} is not a callable! pass either a function or a method!"
-        )
+        assert callable(
+            func
+        ), f"{func} is not a callable! pass either a function or a method!"
         argspec = inspect.getfullargspec(func).args
         if argspec == ["self"]:
             self._get_index_list_func = MethodType(func, self)
@@ -697,9 +696,9 @@ class BaseExplainer(ABC):
         func should either be a function that takes a single parameter: def func(index)
         or a method that takes a single parameter: def func(self, index)
         """
-        assert callable(func), (
-            f"{func} is not a callable! pass either a function or a method!"
-        )
+        assert callable(
+            func
+        ), f"{func} is not a callable! pass either a function or a method!"
         argspec = inspect.getfullargspec(func).args
         if argspec == ["self", "index"]:
             self._get_X_row_func = MethodType(func, self)
@@ -735,9 +734,9 @@ class BaseExplainer(ABC):
         func should either be a function that takes a single parameter: def func(index)
         or a method that takes a single parameter: def func(self, index)
         """
-        assert callable(func), (
-            f"{func} is not a callable! pass either a function or a method!"
-        )
+        assert callable(
+            func
+        ), f"{func} is not a callable! pass either a function or a method!"
         argspec = inspect.getfullargspec(func).args
         if argspec == ["self", "index"]:
             self._get_y_func = func = MethodType(func, self)
@@ -763,17 +762,12 @@ class BaseExplainer(ABC):
 
         if len(inputs) == len(self.merged_cols):
             cols = self.columns_ranked_by_shap() if ranked_by_shap else self.merged_cols
-            try:
-                with pd.option_context("future.no_silent_downcasting", True):
-                    df_merged = (
-                        pd.DataFrame(dict(zip(cols, inputs)), index=[0])
-                        .fillna(self.na_fill)
-                        .infer_objects(copy=False)[self.merged_cols]
-                    )
-            except OptionError:
-                df_merged = pd.DataFrame(dict(zip(cols, inputs)), index=[0]).fillna(
-                    self.na_fill
-                )[self.merged_cols]
+            # Removed deprecated pd.option_context("future.no_silent_downcasting") and copy=False
+            df_merged = (
+                pd.DataFrame(dict(zip(cols, inputs)), index=[0])
+                .fillna(self.na_fill)
+                .infer_objects()[self.merged_cols]
+            )
             if return_merged:
                 return df_merged
             else:
@@ -828,9 +822,9 @@ class BaseExplainer(ABC):
           value of col, prediction for index
 
         """
-        assert (col in self.X.columns) or (col in self.onehot_cols), (
-            f"{col} not in columns of dataset"
-        )
+        assert (col in self.X.columns) or (
+            col in self.onehot_cols
+        ), f"{col} not in columns of dataset"
         if index is not None:
             X_row = self.get_X_row(index)
         if X_row is not None:
@@ -840,9 +834,9 @@ class BaseExplainer(ABC):
                 col_value = X_row[col].item()
                 X_row = X_cats_to_X(X_row, self.onehot_dict, self.columns)
             else:
-                assert matching_cols(X_row.columns, self.columns), (
-                    "X_row should have the same columns as explainer.columns or explainer.merged_cols!"
-                )
+                assert matching_cols(
+                    X_row.columns, self.columns
+                ), "X_row should have the same columns as explainer.columns or explainer.merged_cols!"
                 if col in self.onehot_cols:
                     col_value = retrieve_onehot_value(
                         X_row, col, self.onehot_dict[col], self.onehot_notencoded[col]
@@ -854,11 +848,15 @@ class BaseExplainer(ABC):
             if self.is_classifier:
                 if pos_label is None:
                     pos_label = self.pos_label
-                prediction = self.model.predict_proba(X_row)[0][pos_label].squeeze()
+                pred_probas_raw = self.model.predict_proba(X_row)[0]
+                pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+                prediction = np.asarray(pred_probas_raw)[pos_label].squeeze()
                 if self.model_output == "probability":
                     prediction = 100 * prediction
             elif self.is_regression:
-                prediction = self.model.predict(X_row)[0].squeeze()
+                pred_raw = self.model.predict(X_row)[0]
+                pred_raw = _ensure_numeric_predictions(pred_raw)
+                prediction = np.asarray(pred_raw).squeeze()
             return col_value, prediction
         else:
             raise ValueError("You need to pass either index or X_row!")
@@ -984,13 +982,13 @@ class BaseExplainer(ABC):
         if not hasattr(self, "_preds"):
             print("Calculating predictions...", flush=True)
             if self.shap == "skorch":  # skorch model.predict need np.array
-                self._preds = (
-                    self.model.predict(self.X.values).squeeze().astype(self.precision)
-                )
+                pred_raw = self.model.predict(self.X.values)
+                pred_raw = _ensure_numeric_predictions(pred_raw)
+                self._preds = np.asarray(pred_raw).squeeze().astype(self.precision)
             else:  # Pipelines.predict need pd.DataFrame:
-                self._preds = (
-                    self.model.predict(self.X).squeeze().astype(self.precision)
-                )
+                pred_raw = self.model.predict(self.X)
+                pred_raw = _ensure_numeric_predictions(pred_raw)
+                self._preds = np.asarray(pred_raw).squeeze().astype(self.precision)
 
         return self._preds
 
@@ -1050,6 +1048,112 @@ class BaseExplainer(ABC):
             cutoff = importance_df.Importance.min()
         return importance_df[importance_df.Importance >= cutoff].head(topx)
 
+    def _fix_xgboost_model_for_shap(self, model):
+        """Fix XGBoost 3.1+ models that return base_score as string.
+
+        XGBoost 3.1+ returns base_score as a string like '[2.0719469E0]' which
+        breaks shap's TreeExplainer. This method ensures base_score is numeric
+        in both get_params() and the booster's internal configuration.
+
+        Note: shap accesses the booster's internal JSON config, so we need to
+        fix both get_params() and the booster's config.
+        """
+        from explainerdashboard.explainer_methods import _ensure_numeric_predictions
+        import json  # Import at function level to avoid NameError in exception handler
+
+        # Check if this is an XGBoost model
+        model_type_str = str(type(model))
+        if not ("XGBClassifier" in model_type_str or "XGBRegressor" in model_type_str):
+            return model
+
+        # Fix base_score if it's a string
+        try:
+            # Fix get_params() base_score
+            params = model.get_params()
+            base_score_fixed = None
+            if "base_score" in params:
+                base_score_raw = params["base_score"]
+                if isinstance(base_score_raw, str):
+                    # Convert string base_score to numeric
+                    base_score_fixed = _ensure_numeric_predictions(base_score_raw)
+                    if isinstance(base_score_fixed, np.ndarray):
+                        base_score_fixed = float(
+                            base_score_fixed.item()
+                            if base_score_fixed.ndim == 0
+                            else base_score_fixed[0]
+                        )
+                    else:
+                        base_score_fixed = float(base_score_fixed)
+                    # Set the fixed base_score back to the model
+                    model.set_params(base_score=base_score_fixed)
+
+            # Also fix the booster's internal configuration
+            # Shap accesses the booster's config directly via get_dump() or config JSON
+            try:
+                booster = model.get_booster()
+                # Try to get config as JSON string
+                try:
+                    config_str = booster.save_config()
+                    config = json.loads(config_str)
+                    # Navigate to learner -> learner_model_param -> base_score
+                    if (
+                        "learner" in config
+                        and "learner_model_param" in config["learner"]
+                    ):
+                        learner_params = config["learner"]["learner_model_param"]
+                        if "base_score" in learner_params:
+                            base_score_raw = learner_params["base_score"]
+                            if isinstance(base_score_raw, str):
+                                if base_score_fixed is None:
+                                    base_score_fixed = _ensure_numeric_predictions(
+                                        base_score_raw
+                                    )
+                                    if isinstance(base_score_fixed, np.ndarray):
+                                        base_score_fixed = float(
+                                            base_score_fixed.item()
+                                            if base_score_fixed.ndim == 0
+                                            else base_score_fixed[0]
+                                        )
+                                    else:
+                                        base_score_fixed = float(base_score_fixed)
+                                # Update the config
+                                learner_params["base_score"] = str(base_score_fixed)
+                                # Reload the config
+                                booster.load_config(json.dumps(config))
+                except (AttributeError, KeyError, json.JSONDecodeError, TypeError):
+                    # If we can't access config this way, try attributes
+                    try:
+                        if (
+                            hasattr(booster, "attributes")
+                            and "base_score" in booster.attributes
+                        ):
+                            base_score_raw = booster.attributes["base_score"]
+                            if isinstance(base_score_raw, str):
+                                if base_score_fixed is None:
+                                    base_score_fixed = _ensure_numeric_predictions(
+                                        base_score_raw
+                                    )
+                                    if isinstance(base_score_fixed, np.ndarray):
+                                        base_score_fixed = float(
+                                            base_score_fixed.item()
+                                            if base_score_fixed.ndim == 0
+                                            else base_score_fixed[0]
+                                        )
+                                    else:
+                                        base_score_fixed = float(base_score_fixed)
+                                booster.set_attr(base_score=str(base_score_fixed))
+                    except (AttributeError, KeyError):
+                        pass
+            except (AttributeError, KeyError):
+                # Booster might not have these methods/attributes
+                pass
+        except Exception:
+            # If we can't fix it, return model as-is
+            # The error will be caught and handled by shap or our conversion functions
+            pass
+
+        return model
+
     @property
     def shap_explainer(self):
         """ """
@@ -1061,7 +1165,9 @@ class BaseExplainer(ABC):
                     "Generating self.shap_explainer = "
                     f"shap.TreeExplainer(model{NoX_str})"
                 )
-                self._shap_explainer = shap.TreeExplainer(self.model)
+                # Fix XGBoost 3.1+ base_score string format before shap accesses it
+                model_for_shap = self._fix_xgboost_model_for_shap(self.model)
+                self._shap_explainer = shap.TreeExplainer(model_for_shap)
             elif self.shap == "linear":
                 if self.X_background is None:
                     print(
@@ -1124,7 +1230,9 @@ class BaseExplainer(ABC):
 
                 def model_predict(data_asarray):
                     data_asframe = pd.DataFrame(data_asarray, columns=self.columns)
-                    preds = self.model.predict(data_asframe)
+                    preds_raw = self.model.predict(data_asframe)
+                    preds_raw = _ensure_numeric_predictions(preds_raw)
+                    preds = np.asarray(preds_raw)
                     return preds.reshape(len(preds))
 
                 self._shap_explainer = shap.KernelExplainer(
@@ -1145,10 +1253,17 @@ class BaseExplainer(ABC):
             # CatBoost needs shap values calculated before expected value
             if not hasattr(self, "_shap_values"):
                 _ = self.get_shap_values_df()
-            self._shap_base_value = self.shap_explainer.expected_value
-            if isinstance(self._shap_base_value, np.ndarray):
-                # shap library now returns an array instead of float
-                self._shap_base_value = self._shap_base_value.item()
+            base_value_raw = self.shap_explainer.expected_value
+            base_value_raw = _ensure_numeric_predictions(base_value_raw)
+            base_value_array = np.asarray(base_value_raw)
+            # Convert to scalar float
+            if base_value_array.ndim == 0:
+                self._shap_base_value = float(base_value_array.item())
+            elif len(base_value_array) == 1:
+                self._shap_base_value = float(base_value_array[0])
+            else:
+                # Multiple values - take first (shouldn't happen for regression)
+                self._shap_base_value = float(base_value_array[0])
         return self._shap_base_value
 
     @insert_pos_label
@@ -1166,8 +1281,13 @@ class BaseExplainer(ABC):
                     columns=self.columns,
                 )
             else:
+                shap_values_raw = self.shap_explainer.shap_values(
+                    self.X, **self.shap_kwargs
+                )
+                # Handle XGBoost 3.0+ string predictions
+                shap_values_raw = _ensure_numeric_predictions(shap_values_raw)
                 self._shap_values_df = pd.DataFrame(
-                    self.shap_explainer.shap_values(self.X, **self.shap_kwargs),
+                    np.asarray(shap_values_raw),
                     columns=self.columns,
                 )
             self._shap_values_df = merge_categorical_shap_values(
@@ -1404,9 +1524,9 @@ class BaseExplainer(ABC):
                 :, self.merged_cols.get_loc(col), :
             ]
         else:
-            assert interact_col in self.merged_cols, (
-                f"{interact_col} not in self.merged_cols!"
-            )
+            assert (
+                interact_col in self.merged_cols
+            ), f"{interact_col} not in self.merged_cols!"
             return self.shap_interaction_values(pos_label)[
                 :, self.merged_cols.get_loc(col), self.merged_cols.get_loc(interact_col)
             ]
@@ -1567,9 +1687,9 @@ class BaseExplainer(ABC):
           pd.DataFrame
 
         """
-        assert kind == "shap" or kind == "permutation", (
-            "kind should either be 'shap' or 'permutation'!"
-        )
+        assert (
+            kind == "shap" or kind == "permutation"
+        ), "kind should either be 'shap' or 'permutation'!"
         if kind == "permutation":
             return self.get_permutation_importances_df(topx, cutoff, pos_label)
         elif kind == "shap":
@@ -1624,9 +1744,9 @@ class BaseExplainer(ABC):
                 X_row_merged = X_row
                 X_row = X_cats_to_X(X_row, self.onehot_dict, self.X.columns)
             else:
-                assert matching_cols(X_row.columns, self.columns), (
-                    "X_row should have the same columns as self.X or self.merged_cols!"
-                )
+                assert matching_cols(
+                    X_row.columns, self.columns
+                ), "X_row should have the same columns as self.X or self.merged_cols!"
                 X_row_merged = merge_categorical_columns(
                     X_row,
                     self.onehot_dict,
@@ -1741,9 +1861,9 @@ class BaseExplainer(ABC):
         Returns:
             pd.DataFrame
         """
-        assert col in self.X.columns or col in self.onehot_cols, (
-            f"{col} not in columns of dataset"
-        )
+        assert (
+            col in self.X.columns or col in self.onehot_cols
+        ), f"{col} not in columns of dataset"
         if col in self.onehot_cols:
             grid_values = self.ordered_cats(col, n_grid_points, sort)
             if index is not None or X_row is not None:
@@ -1782,9 +1902,9 @@ class BaseExplainer(ABC):
             if matching_cols(X_row.columns, self.merged_cols):
                 X_row = X_cats_to_X(X_row, self.onehot_dict, self.X.columns)
             else:
-                assert matching_cols(X_row.columns, self.columns), (
-                    "X_row should have the same columns as self.X or self.merged_cols!"
-                )
+                assert matching_cols(
+                    X_row.columns, self.columns
+                ), "X_row should have the same columns as self.X or self.merged_cols!"
 
             if isinstance(features, str) and drop_na:  # regular col, not onehotencoded
                 sample_size = min(
@@ -2548,14 +2668,14 @@ class ClassifierExplainer(BaseExplainer):
     def pos_label_index(self, pos_label):
         """return int index of pos_label_str"""
         if isinstance(pos_label, int):
-            assert pos_label >= 0 and pos_label <= len(self.labels), (
-                f"pos_label={pos_label}, but should be >= 0 and <= {len(self.labels) - 1}!"
-            )
+            assert (
+                pos_label >= 0 and pos_label <= len(self.labels)
+            ), f"pos_label={pos_label}, but should be >= 0 and <= {len(self.labels) - 1}!"
             return pos_label
         elif isinstance(pos_label, str):
-            assert pos_label in self.labels, (
-                f"Unknown pos_label. {pos_label} not in self.labels!"
-            )
+            assert (
+                pos_label in self.labels
+            ), f"Unknown pos_label. {pos_label} not in self.labels!"
             return self.labels.index(pos_label)
         raise ValueError("pos_label should either be int or str in self.labels!")
 
@@ -2576,18 +2696,18 @@ class ClassifierExplainer(BaseExplainer):
         """returns pred_probas with probability for each class"""
         if not hasattr(self, "_pred_probas"):
             print("Calculating prediction probabilities...", flush=True)
-            assert hasattr(self.model, "predict_proba"), (
-                "model does not have a predict_proba method!"
-            )
+            assert hasattr(
+                self.model, "predict_proba"
+            ), "model does not have a predict_proba method!"
             if self.shap == "skorch":
-                self._pred_probas = self.model.predict_proba(self.X.values).astype(
-                    self.precision
-                )
+                pred_probas_raw = self.model.predict_proba(self.X.values)
+                pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+                self._pred_probas = np.asarray(pred_probas_raw).astype(self.precision)
             else:
                 warnings.filterwarnings("ignore", category=UserWarning)
-                self._pred_probas = self.model.predict_proba(self.X).astype(
-                    self.precision
-                )
+                pred_probas_raw = self.model.predict_proba(self.X)
+                pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+                self._pred_probas = np.asarray(pred_probas_raw).astype(self.precision)
                 warnings.filterwarnings("default", category=UserWarning)
         return self._pred_probas
 
@@ -2680,8 +2800,10 @@ class ClassifierExplainer(BaseExplainer):
                             "pass model_output='logodds' to get shap values in logodds without the need for "
                             "a background dataset and also working shap interaction values..."
                         )
+                        # Fix XGBoost 3.1+ base_score string format before shap accesses it
+                        model_for_shap = self._fix_xgboost_model_for_shap(self.model)
                         self._shap_explainer = shap.TreeExplainer(
-                            self.model,
+                            model_for_shap,
                             self.X_background
                             if self.X_background is not None
                             else self.X,
@@ -2694,8 +2816,10 @@ class ClassifierExplainer(BaseExplainer):
                         print(
                             f"Generating self.shap_explainer = shap.TreeExplainer(model{', X_background' if self.X_background is not None else ''})"
                         )
+                        # Fix XGBoost 3.1+ base_score string format before shap accesses it
+                        model_for_shap = self._fix_xgboost_model_for_shap(self.model)
                         self._shap_explainer = shap.TreeExplainer(
-                            self.model, self.X_background
+                            model_for_shap, self.X_background
                         )
                 else:
                     if self.model_output == "probability":
@@ -2705,8 +2829,10 @@ class ClassifierExplainer(BaseExplainer):
                     print(
                         f"Generating self.shap_explainer = shap.TreeExplainer(model{', X_background' if self.X_background is not None else ''})"
                     )
+                    # Fix XGBoost 3.1+ base_score string format before shap accesses it
+                    model_for_shap = self._fix_xgboost_model_for_shap(self.model)
                     self._shap_explainer = shap.TreeExplainer(
-                        self.model, self.X_background
+                        model_for_shap, self.X_background
                     )
 
             elif self.shap == "linear":
@@ -2787,7 +2913,10 @@ class ClassifierExplainer(BaseExplainer):
 
                 def model_predict(data_asarray):
                     data_asframe = pd.DataFrame(data_asarray, columns=self.columns)
-                    return self.model.predict_proba(data_asframe)
+                    pred_probas_raw = self.model.predict_proba(data_asframe)
+                    # Handle XGBoost 3.0+ string predictions (though predict_proba usually returns numeric)
+                    pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+                    return np.asarray(pred_probas_raw)
 
                 self._shap_explainer = shap.KernelExplainer(
                     model_predict,
@@ -2803,26 +2932,29 @@ class ClassifierExplainer(BaseExplainer):
         """SHAP base value: average outcome of population"""
         if not hasattr(self, "_shap_base_value"):
             _ = self.get_shap_values_df()  # CatBoost needs to have shap values calculated before expected value for some reason
-            self._shap_base_value = self.shap_explainer.expected_value
-            if (
-                isinstance(self._shap_base_value, np.ndarray)
-                and len(self._shap_base_value) == 1
-            ):
-                self._shap_base_value = self._shap_base_value[0]
-            if isinstance(self._shap_base_value, np.ndarray):
-                self._shap_base_value = list(self._shap_base_value)
+            base_value_raw = self.shap_explainer.expected_value
+            base_value_raw = _ensure_numeric_predictions(base_value_raw)
+            base_value_array = np.asarray(base_value_raw)
+            # Convert to scalar or list as needed
+            if base_value_array.ndim == 0:
+                self._shap_base_value = float(base_value_array.item())
+            elif len(base_value_array) == 1:
+                self._shap_base_value = float(base_value_array[0])
+            else:
+                self._shap_base_value = [float(x) for x in base_value_array]
+
             if len(self.labels) == 2 and isinstance(
-                self._shap_base_value, (np.floating, float)
+                self._shap_base_value, (np.floating, float, int)
             ):
                 if self.model_output == "probability":
                     self._shap_base_value = [
-                        1 - self._shap_base_value,
-                        self._shap_base_value,
+                        1 - float(self._shap_base_value),
+                        float(self._shap_base_value),
                     ]
                 else:  # assume logodds
                     self._shap_base_value = [
-                        -self._shap_base_value,
-                        self._shap_base_value,
+                        -float(self._shap_base_value),
+                        float(self._shap_base_value),
                     ]
             assert len(self._shap_base_value) == len(self.labels), (
                 f"len(shap_explainer.expected_value)={len(self._shap_base_value)}"
@@ -2844,13 +2976,16 @@ class ClassifierExplainer(BaseExplainer):
             if self.shap == "skorch":
                 import torch
 
-                _shap_values = self.shap_explainer.shap_values(
+                _shap_values_raw = self.shap_explainer.shap_values(
                     torch.tensor(self.X.values.astype("float32")), **self.shap_kwargs
                 )
             else:
-                _shap_values = self.shap_explainer.shap_values(
+                _shap_values_raw = self.shap_explainer.shap_values(
                     self.X.values, **self.shap_kwargs
                 )
+            # Handle XGBoost 3.0+ string predictions
+            _shap_values = _ensure_numeric_predictions(_shap_values_raw)
+            _shap_values = np.asarray(_shap_values)
 
             if len(self.labels) == 2:
                 if (
@@ -3316,7 +3451,11 @@ class ClassifierExplainer(BaseExplainer):
             ):
                 X_train, X_test = self.X.iloc[train_index], self.X.iloc[test_index]
                 y_train, y_test = self.y.iloc[train_index], self.y.iloc[test_index]
-                preds = clone(self.model).fit(X_train, y_train).predict_proba(X_test)
+                preds_raw = (
+                    clone(self.model).fit(X_train, y_train).predict_proba(X_test)
+                )
+                preds_raw = _ensure_numeric_predictions(preds_raw)
+                preds = np.asarray(preds_raw)
                 for label in range(len(self.labels)):
                     for cut in np.linspace(1, 99, 99, dtype=int):
                         y_true = np.where(y_test == label, 1, 0)
@@ -3549,7 +3688,9 @@ class ClassifierExplainer(BaseExplainer):
                 X_row = X_cats_to_X(X_row, self.onehot_dict, self.X.columns)
             if self.shap == "skorch":
                 X_row = X_row.values.astype("float32")
-            pred_probas = self.model.predict_proba(X_row)[0, :].squeeze()
+            pred_probas_raw = self.model.predict_proba(X_row)[0, :]
+            pred_probas_raw = _ensure_numeric_predictions(pred_probas_raw)
+            pred_probas = np.asarray(pred_probas_raw).squeeze()
 
         preds_df = pd.DataFrame(dict(label=self.labels, probability=pred_probas))
         if logodds and all(preds_df.probability < 1 - np.finfo(np.float64).eps):
@@ -4212,7 +4353,9 @@ class RegressionExplainer(BaseExplainer):
                 X_row = X_cats_to_X(X_row, self.onehot_dict, self.X.columns)
         if self.shap == "skorch":
             X_row = X_row.values.astype("float32")
-        pred = self.model.predict(X_row).item()
+        pred_raw = self.model.predict(X_row)
+        pred_raw = _ensure_numeric_predictions(pred_raw)
+        pred = np.asarray(pred_raw).item()
         preds_df = pd.DataFrame(columns=["", self.target])
         preds_df = append_dict_to_df(
             preds_df, {"": "Predicted", self.target: f"{pred:.{round}f} {self.units}"}
@@ -4270,7 +4413,9 @@ class RegressionExplainer(BaseExplainer):
             ):
                 X_train, X_test = self.X.iloc[train_index], self.X.iloc[test_index]
                 y_train, y_test = self.y.iloc[train_index], self.y.iloc[test_index]
-                preds = clone(self.model).fit(X_train, y_train).predict(X_test)
+                preds_raw = clone(self.model).fit(X_train, y_train).predict(X_test)
+                preds_raw = _ensure_numeric_predictions(preds_raw)
+                preds = np.asarray(preds_raw)
                 metrics_dict["mean-squared-error"].append(
                     mean_squared_error(y_test, preds)
                 )
@@ -4639,11 +4784,11 @@ class TreeExplainer(BaseExplainer):
             except Exception:
                 print(
                     """
-                WARNING: you don't seem to have graphviz in your path (cannot run 'dot -V'), 
+                WARNING: you don't seem to have graphviz in your path (cannot run 'dot -V'),
                 so no dtreeviz visualisation of decision trees will be shown on the shadow trees tab.
 
-                See https://github.com/parrt/dtreeviz for info on how to properly install graphviz 
-                for dtreeviz. 
+                See https://github.com/parrt/dtreeviz for info on how to properly install graphviz
+                for dtreeviz.
                 """
                 )
                 self._graphviz_available = False
@@ -4670,13 +4815,16 @@ class TreeExplainer(BaseExplainer):
           dataframe with summary of the decision tree path
 
         """
-        assert tree_idx >= 0 and tree_idx < len(self.shadow_trees), (
-            f"tree index {tree_idx} outside 0 and number of trees ({len(self.decision_trees)}) range"
-        )
+        assert (
+            tree_idx >= 0 and tree_idx < len(self.shadow_trees)
+        ), f"tree index {tree_idx} outside 0 and number of trees ({len(self.decision_trees)}) range"
         X_row = self.get_X_row(index)
         if self.is_classifier:
             return get_decisionpath_df(
-                self.shadow_trees[tree_idx], X_row.squeeze(), pos_label=pos_label
+                self.shadow_trees[tree_idx],
+                X_row.squeeze(),
+                pos_label=pos_label,
+                class_names=self.labels,
             )
         else:
             return get_decisionpath_df(self.shadow_trees[tree_idx], X_row.squeeze())
@@ -4825,7 +4973,8 @@ class RandomForestExplainer(TreeExplainer):
                 self.model, "estimators_"
             ), """self.model does not have an estimators_ attribute, so probably not
                 actually a sklearn RandomForest?"""
-            y = self.y if self.y_missing else self.y.astype("int16")
+            # dtreeviz requires y to be int dtype (int64), not int16
+            y = self.y if self.y_missing else self.y.astype(int)
             self._shadow_trees = [
                 ShadowDecTree.get_shadow_tree(
                     decision_tree,
@@ -4915,11 +5064,12 @@ class XGBExplainer(TreeExplainer):
                 flush=True,
             )
 
+            # dtreeviz requires y to be int dtype (int64), not int32
             self._shadow_trees = [
                 ShadowDecTree.get_shadow_tree(
                     self.model.get_booster(),
                     self.X,
-                    self.y.astype("int32"),
+                    self.y.astype(int),
                     feature_names=self.X.columns.tolist(),
                     target_name="target",
                     class_names=self.labels if self.is_classifier else None,
@@ -4943,9 +5093,9 @@ class XGBExplainer(TreeExplainer):
           dataframe with summary of the decision tree path
 
         """
-        assert tree_idx >= 0 and tree_idx < self.no_of_trees, (
-            f"tree index {tree_idx} outside 0 and number of trees ({len(self.decision_trees)}) range"
-        )
+        assert (
+            tree_idx >= 0 and tree_idx < self.no_of_trees
+        ), f"tree index {tree_idx} outside 0 and number of trees ({len(self.decision_trees)}) range"
 
         if self.is_classifier:
             if len(self.labels) > 2:
