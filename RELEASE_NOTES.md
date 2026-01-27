@@ -9,6 +9,9 @@
 - Preserve categorical dtypes during permutation importance shuffles and PDP grid generation to prevent dtype-related model errors (e.g., LightGBM).
 - Align categorical/boolean dtypes for user-provided `X_row` inputs and add dtype alignment tests.
 
+### Improvements
+- Add support for GPU Tree SHAP explainers via `shap='gputree'` (requires CUDA-enabled SHAP).
+
 ## Version 0.5.4:
 
 ### Breaking Changes

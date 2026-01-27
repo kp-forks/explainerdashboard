@@ -330,9 +330,9 @@ class BaseExplainer(ABC):
                     "sklearn-compatible NeuralNet wrapper are supported for now! "
                     "See https://github.com/skorch-dev/skorch"
                 )
-            assert shap in ["tree", "linear", "deep", "kernel", "skorch"], (
-                "ERROR! Only shap='guess', 'tree', 'linear', ' kernel' or 'skorch' are "
-                " supported for now!"
+            assert shap in ["tree", "linear", "deep", "kernel", "skorch", "gputree"], (
+                "ERROR! Only shap='guess', 'tree', 'linear', ' kernel', 'skorch' "
+                "or 'gputree' are supported for now!"
             )
             self.shap = shap
         if self.shap in {"kernel", "skorch", "linear"}:
@@ -1276,6 +1276,24 @@ class BaseExplainer(ABC):
                     if self.X_background is not None
                     else shap.sample(self.X, 50),
                 )
+            elif self.shap == "gputree":
+                print(
+                    "Generating self.shap_explainer = shap.GPUTreeExplainer(model, X). "
+                    "Make sure you have a CUDA-enabled GPU and a CUDA-built SHAP "
+                    "installed. See https://shap.readthedocs.io/en/latest/example_notebooks/api_examples/explainers/GPUTree.html#"  # noqa: E501
+                )
+                X_data = self.X_background if self.X_background is not None else self.X
+                if hasattr(shap, "explainers") and hasattr(shap.explainers, "GPUTree"):
+                    explainer_cls = shap.explainers.GPUTree
+                elif hasattr(shap, "GPUTreeExplainer"):
+                    explainer_cls = shap.GPUTreeExplainer
+                else:
+                    raise ValueError(
+                        "shap does not expose GPUTreeExplainer. "
+                        "Please install a CUDA-enabled SHAP build that includes "
+                        "GPUTree support."
+                    )
+                self._shap_explainer = explainer_cls(self.model, X_data)
         return self._shap_explainer
 
     @insert_pos_label
