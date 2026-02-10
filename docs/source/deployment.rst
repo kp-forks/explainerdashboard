@@ -97,7 +97,9 @@ Deploying to heroku
 In case you would like to deploy to `heroku <www.heroku.com>`_ (which is normally
 the simplest option for dash apps, see
 `dash instructions here <https://dash.plotly.com/deployment>`_). The demonstration
-dashboard is also hosted on heroku at `titanicexplainer.herokuapp.com <http://titanicexplainer.herokuapp.com>`_.
+dashboard is hosted on Fly.io at `titanicexplainer.fly.dev <https://titanicexplainer.fly.dev>`_
+and on Hugging Face Spaces at
+`huggingface.co/spaces/oegedijk/explainingtitanic <https://huggingface.co/spaces/oegedijk/explainingtitanic>`_.
 
 In order to deploy the heroku there are a few things to keep in mind. First of
 all you need to add ``explainerdashboard`` and ``gunicorn`` to
@@ -133,6 +135,94 @@ adding the following buildstack (as well as the ``python`` buildpack):
 ``https://github.com/weibeld/heroku-buildpack-graphviz.git``
 
 (you can add buildpacks through the "settings" page of your heroku project)
+
+Deploying to Fly.io
+===================
+
+`Fly.io <https://fly.io>`_ is a good option for running ``explainerdashboard`` as
+a small containerized web app.
+
+At minimum you need:
+
+1. A ``dashboard.py`` with a WSGI app object::
+
+    from explainerdashboard import ExplainerDashboard
+
+    db = ExplainerDashboard.from_config("dashboard.yaml")
+    app = db.flask_server()
+
+2. A ``requirements.txt`` that includes at least::
+
+    explainerdashboard
+    gunicorn
+
+3. A ``Procfile`` or start command equivalent::
+
+    web: gunicorn dashboard:app --bind 0.0.0.0:${PORT:-8080}
+
+Then deploy with ``flyctl``:
+
+.. highlight:: bash
+
+::
+
+    $ fly auth login
+    $ fly launch
+    $ fly deploy
+
+When prompted during ``fly launch``, set the internal port to ``8080`` if needed
+so it matches your ``gunicorn`` bind port.
+
+If your app serves under a subpath (for example behind a proxy), also set
+``url_base_pathname``, ``routes_pathname_prefix`` and ``requests_pathname_prefix``
+on ``ExplainerDashboard``.
+
+.. highlight:: python
+
+Deploying to Hugging Face Spaces
+================================
+
+The easiest way to deploy to `Hugging Face Spaces <https://huggingface.co/spaces>`_
+is as a Docker Space.
+
+Create a new Space with:
+
+- SDK: ``Docker``
+- Visibility: your choice
+
+Add the following files to your Space repository.
+
+**requirements.txt**::
+
+    explainerdashboard
+    gunicorn
+
+**dashboard.py**::
+
+    from explainerdashboard import ExplainerDashboard
+
+    db = ExplainerDashboard.from_config("dashboard.yaml")
+    app = db.flask_server()
+
+.. highlight:: docker
+
+**Dockerfile**::
+
+    FROM python:3.11-slim
+
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    COPY . .
+
+    EXPOSE 7860
+    CMD ["gunicorn", "dashboard:app", "--bind", "0.0.0.0:7860"]
+
+.. highlight:: python
+
+Push to the Space repository and Hugging Face will build and start the app.
+If your dashboard uses tree visualization (``dtreeviz``), make sure system
+``graphviz`` is installed in the Docker image.
 
 Docker deployment
 =================

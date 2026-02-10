@@ -112,7 +112,8 @@ Or, as a one-liner::
     ).run()
 
 The result of the lines above can be seen in the screenshot above or can be
-viewed on `this example dashboard deployed to heroku. <http://titanicexplainer.herokuapp.com>`_
+viewed on `this example dashboard deployed on Fly.io. <https://titanicexplainer.fly.dev>`_
+and `on Hugging Face Spaces. <https://huggingface.co/spaces/oegedijk/explainingtitanic>`_
 
 For a more simple single tab dashboard try::
 
@@ -141,7 +142,7 @@ component::
 
 
 A more elaborate example of  :ref:`a custom dashboard<CustomModelTab>`
-(example deployed `here <http://titanicexplainer.herokuapp.com/custom/>`_):
+(example deployed on Fly.io `here <https://titanicexplainer.fly.dev/custom/>`_):
 
 .. image:: screenshots/custom_dashboard.*
 

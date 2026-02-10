@@ -24,7 +24,7 @@ a single [ExplainerHub](https://explainerdashboard.readthedocs.io/en/latest/hub.
 Dashboards can be exported to static html directly from a running dashboard, or
 programmatically as an artifact as part of an automated CI/CD deployment process.
 
- Examples deployed at: [titanicexplainer.herokuapp.com](http://titanicexplainer.herokuapp.com),
+ Examples deployed at: [Fly.io](https://titanicexplainer.fly.dev), [Hugging Face Space](https://huggingface.co/spaces/oegedijk/explainingtitanic),
  detailed documentation at [explainerdashboard.readthedocs.io](http://explainerdashboard.readthedocs.io),
  example notebook on how to launch dashboard for different models [here](notebooks/dashboard_examples.ipynb), and an example notebook on how to interact with the explainer object [here](notebooks/explainer_examples.ipynb).
 
@@ -87,7 +87,7 @@ Auto-detection uses the presence of `/opt/ml/metadata/resource-metadata.json`.
 ![explainerdashboard.gif](explainerdashboard.gif)
 
 <!-- [![Dashboard Screenshot](https://i.postimg.cc/Gm8RnKVb/Screenshot-2020-07-01-at-13-25-19.png)](https://postimg.cc/PCj9mWd7) -->
-(for live demonstration see [titanicexplainer.herokuapp.com](http://titanicexplainer.herokuapp.com))
+(for live demonstration see [Fly.io](https://titanicexplainer.fly.dev) or [Hugging Face Space](https://huggingface.co/spaces/oegedijk/explainingtitanic))
 ## Background
 
 In a lot of organizations, especially governmental, but with the GDPR also increasingly in private sector, it is becoming more and more important to be able to explain the inner workings of your machine learning algorithms. Customers have to some extent a right to an explanation why they received a certain prediction, and more and more internal and external regulators require it. With recent innovations in explainable AI (e.g. SHAP values) the old black box trope is no longer valid, but it can still take quite a bit of data wrangling and plot manipulation to get the explanations out of a model. This library aims to make this easy.
@@ -533,7 +533,7 @@ own model, project and needs. You can use the [ExplainerComposites](https://gith
 are used for the tabs of the default dashboard as a starting point, and edit
 them to reorganize components, add text, etc.
 See [custom dashboard documentation](https://explainerdashboard.readthedocs.io/en/latest/custom.html)
-for more details. A deployed custom dashboard can be found [here](http://titanicexplainer.herokuapp.com/custom/)([source code](https://github.com/oegedijk/explainingtitanic/blob/master/buildcustom.py)).
+for more details. A deployed custom dashboard can be found on [Fly.io](https://titanicexplainer.fly.dev/custom/)([source code](https://github.com/oegedijk/explainingtitanic/blob/master/buildcustom.py)).
 
 ## Deployment
 
@@ -543,6 +543,10 @@ start the server with e.g. `gunicorn dashboard:app`
 (assuming the file you defined the dashboard in was called `dashboard.py`).
 See also the [ExplainerDashboard section](https://explainerdashboard.readthedocs.io/en/latest/dashboards.html)
 and the [deployment section of the documentation](https://explainerdashboard.readthedocs.io/en/latest/deployment.html).
+For platform-specific guides, see:
+[Deploying to Fly.io](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-fly-io)
+and
+[Deploying to Hugging Face Spaces](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-hugging-face-spaces).
 
 It can be helpful to store your `explainer` and dashboard layout to disk, and
 then reload, e.g.:
@@ -647,7 +651,7 @@ Example notebook on how to design a custom dashboard: [custom_examples.ipynb](no
 
 ## Deployed example:
 
-You can find an example dashboard at [titanicexplainer.herokuapp.com](http://titanicexplainer.herokuapp.com)
+You can find example dashboards at [Fly.io](https://titanicexplainer.fly.dev) and [Hugging Face Space](https://huggingface.co/spaces/oegedijk/explainingtitanic)
 
 (source code at [https://github.com/oegedijk/explainingtitanic](https://github.com/oegedijk/explainingtitanic))
 
