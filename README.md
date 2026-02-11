@@ -548,67 +548,19 @@ For platform-specific guides, see:
 and
 [Deploying to Hugging Face Spaces](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-hugging-face-spaces).
 and
-[Deploying to Azure Web Apps](#deploying-to-azure-web-apps).
+[Deploying to Azure Web Apps](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-azure-web-apps),
+[Deploying behind reverse proxies and path prefixes](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-behind-reverse-proxies-and-path-prefixes),
+[Deploying to Google Cloud Run](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-google-cloud-run),
+[Deploying to Kubernetes (Ingress)](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-to-kubernetes-ingress),
+[Deploying in Databricks notebooks](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-in-databricks-notebooks),
+and
+[Deploying in Kaggle notebooks](https://explainerdashboard.readthedocs.io/en/latest/deployment.html#deploying-in-kaggle-notebooks).
 
-### Deploying to Azure Web Apps
-
-If your app gets stuck on the dashboard `Loading...` screen on Azure, the most common
-issue is that the dashboard HTML is returned, but Dash endpoints such as
-`/_dash-layout`, `/_dash-dependencies`, or `/_dash-component-suites/*` are not mounted
-on the same Flask server and base path.
-
-Use a single WSGI app (`app = db.flask_server()`) and run it with `gunicorn`.
-Also avoid re-building the model/explainer inside a Flask request handler.
-
-**dashboard.py**:
-```python
-import os
-from explainerdashboard import ClassifierExplainer, ExplainerDashboard
-
-# Build/load these once at startup:
-# model = ...
-# X_test = ...
-# y_test = ...
-
-explainer = ClassifierExplainer(model, X_test, y_test)
-
-# If your app is mounted under a subpath, e.g. "/dashboard/",
-# set APP_BASE_PATH=/dashboard/ in Azure App Settings.
-base_path = os.getenv("APP_BASE_PATH", "/")
-if not base_path.startswith("/"):
-    base_path = "/" + base_path
-if not base_path.endswith("/"):
-    base_path = base_path + "/"
-
-db = ExplainerDashboard(
-    explainer,
-    url_base_pathname=base_path,
-    routes_pathname_prefix=base_path,
-    requests_pathname_prefix=base_path,
-    title="Model Explainer",
-)
-
-app = db.flask_server()
-```
-
-**requirements.txt** should include at least:
-```txt
-explainerdashboard
-gunicorn
-```
-
-Set your Azure Web App startup command to:
-
-```bash
-gunicorn --bind=0.0.0.0:${PORT:-8000} dashboard:app
-```
-
-Troubleshooting checklist:
-
-1. Open browser dev tools and check network requests to `/_dash-layout` and `/_dash-dependencies`.
-2. If those requests return `404`, fix your base path prefixes (or set `APP_BASE_PATH=/`).
-3. If initial page load is very slow, make sure model training and data loading are not done per request.
-4. Check App Service logs for worker timeouts and increase plan/resources if needed.
+For a concise production pattern, expose a single WSGI app and run with `gunicorn`:
+`app = db.flask_server()` and `gunicorn --bind=0.0.0.0:${PORT:-8000} dashboard:app`.
+If your deployment runs behind a proxy/path prefix and you see `Loading...`, check
+the deployment docs above and align `url_base_pathname`, `routes_pathname_prefix`,
+and `requests_pathname_prefix`.
 
 It can be helpful to store your `explainer` and dashboard layout to disk, and
 then reload, e.g.:

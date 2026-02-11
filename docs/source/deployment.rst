@@ -179,6 +179,133 @@ on ``ExplainerDashboard``.
 
 .. highlight:: python
 
+Deploying behind reverse proxies and path prefixes
+==================================================
+
+For any platform behind a reverse proxy or ingress (Azure, Kubernetes, AWS ALB, etc),
+the key requirement is that Dash base paths and proxy routing agree.
+
+Use a shared base path (for example ``/dashboard/``) for all three settings::
+
+    db = ExplainerDashboard(
+        explainer,
+        url_base_pathname="/dashboard/",
+        routes_pathname_prefix="/dashboard/",
+        requests_pathname_prefix="/dashboard/",
+    )
+    app = db.flask_server()
+
+Quick checks:
+
+1. The page is served from the same base path as Dash API calls.
+2. ``/_dash-layout`` and ``/_dash-dependencies`` return ``200`` (not ``404``).
+3. ``/_dash-component-suites/*`` assets are reachable.
+4. The app binds to ``0.0.0.0:$PORT`` in production.
+
+Deploying to Google Cloud Run
+=============================
+
+Cloud Run works well with ``gunicorn`` and a containerized app.
+
+**dashboard.py**::
+
+    from explainerdashboard import ExplainerDashboard
+
+    db = ExplainerDashboard.from_config("dashboard.yaml")
+    app = db.flask_server()
+
+**Dockerfile**::
+
+    FROM python:3.11-slim
+
+    WORKDIR /app
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    COPY . .
+
+    CMD ["sh", "-c", "gunicorn dashboard:app --bind 0.0.0.0:${PORT}"]
+
+Notes:
+
+1. Keep startup fast (load prebuilt explainer, do not retrain on request).
+2. If served under a path prefix, set the three Dash pathname prefixes as above.
+
+Deploying to Kubernetes (Ingress)
+=================================
+
+For Kubernetes with ingress path routing, avoid path rewrites unless your Dash prefixes
+match the rewritten path exactly.
+
+Example deployment env var:
+
+.. code-block:: yaml
+
+    env:
+      - name: APP_BASE_PATH
+        value: /dashboard/
+
+Example app setup:
+
+.. highlight:: python
+
+::
+
+    import os
+    from explainerdashboard import ExplainerDashboard
+
+    base_path = os.getenv("APP_BASE_PATH", "/")
+    db = ExplainerDashboard(
+        explainer,
+        url_base_pathname=base_path,
+        routes_pathname_prefix=base_path,
+        requests_pathname_prefix=base_path,
+    )
+    app = db.flask_server()
+
+If you see ``Loading...`` with ``404`` responses on ``/_dash-*``, fix ingress
+path rules and Dash prefixes first.
+
+.. highlight:: python
+
+Deploying in Databricks notebooks
+=================================
+
+For model exploration in Databricks, run the dashboard in notebook context and make
+sure all Dash pathname prefixes match the Databricks proxy path.
+
+Example::
+
+    from explainerdashboard import ExplainerDashboard
+
+    port = 8050
+    # Replace this with your workspace-specific Databricks proxy base path:
+    base_path = f"/driver-proxy/o/<org-id>/<cluster-id>/{port}/"
+
+    db = ExplainerDashboard(
+        explainer,
+        mode="external",
+        url_base_pathname=base_path,
+        routes_pathname_prefix=base_path,
+        requests_pathname_prefix=base_path,
+    )
+    db.run(port=port)
+
+If you get ``Loading...``, check network requests for ``/_dash-layout`` and
+``/_dash-dependencies``; ``404`` usually means proxy prefix mismatch.
+
+Deploying in Kaggle notebooks
+=============================
+
+Kaggle is best suited for interactive exploration in notebook sessions, not durable
+hosting of a long-running web app.
+
+Recommended pattern:
+
+1. Run in notebook mode (``mode="inline"`` or ``mode="external"``).
+2. Keep it lightweight for notebook resources (for example lower ``plot_sample``,
+   disable expensive tabs such as ``shap_interaction``).
+3. Share results with ``db.save_html("dashboard.html")`` when you need a portable artifact.
+
 Deploying to Hugging Face Spaces
 ================================
 
